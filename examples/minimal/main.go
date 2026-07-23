@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	nanolytica "github.com/eringen/nanolytica-cloud/SDK/go"
+	nanolytica "github.com/Nanolytica/nanolytica-golang-sdk"
 )
 
 func main() {

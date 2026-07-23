@@ -1,3 +1,3 @@
-module github.com/eringen/nanolytica-cloud/SDK/go
+module github.com/Nanolytica/nanolytica-golang-sdk
 
 go 1.22

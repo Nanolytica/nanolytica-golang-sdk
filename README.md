@@ -11,31 +11,31 @@ Go client for [Nanolytica Cloud](https://cloud.nanolytica.org) analytics. Tracks
 
 1. Sign in at [cloud.nanolytica.org](https://cloud.nanolytica.org) and click **Add site**.
 2. Choose **Native App** as the site type (enables app-version display instead of browser names).
-3. Copy the site UUID from the Setup tab — it looks like `3f4a1b2c-...`.
+3. Copy the site UUID from the Setup tab — it looks like `11111111-1111-4111-8111-111111111111`.
 
 ## Install
 
 ```bash
-go get github.com/eringen/nanolytica-cloud/SDK/go
+go get github.com/Nanolytica/nanolytica-golang-sdk
 ```
 
 Import alias keeps call sites short:
 
 ```go
-import nanolytica "github.com/eringen/nanolytica-cloud/SDK/go"
+import nanolytica "github.com/Nanolytica/nanolytica-golang-sdk"
 ```
 
 ## Initialization
 
 ```go
-client, err := nanolytica.New("3f4a1b2c-...", &nanolytica.Options{
+client, err := nanolytica.New("11111111-1111-4111-8111-111111111111", &nanolytica.Options{
     Endpoint:   "https://cloud.nanolytica.org", // default; override for self-hosted
     UserAgent:  "MyApp/1.2.3 (Server; linux)",   // see User-Agent section
     BufferSize: 100,                              // in-memory queue depth
     HTTPClient: nil,                              // nil = 10 s timeout client
 })
 if err != nil {
-    log.Fatal(err) // only fails if siteID is empty
+    log.Fatal(err) // check UUID, endpoint and user agent
 }
 defer client.Close()
 ```
@@ -81,7 +81,7 @@ http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
 | Field | Description |
 |---|---|
-| `Referrer` | Previous URL (≤ 2048 chars) |
+| `Referrer` | Previous URL (≤ 2048 UTF-8 bytes) |
 | `ScreenSize` | `WIDTHxHEIGHT` string, e.g. `"1920x1080"` |
 | `UTMSource` | Value of `utm_source` query param |
 | `UTMMedium` | Value of `utm_medium` query param |
@@ -185,7 +185,7 @@ The server takes everything before the first space, replaces `/` with a space, a
 
 ### `New(siteID string, opts *Options) (*Client, error)`
 
-Creates a client and starts the background worker. Returns `ErrInvalidSiteID` if `siteID` is empty.
+Creates a client and starts the background worker. Returns `ErrInvalidSiteID` if `siteID` is not a UUID.
 
 ### `(*Client) Pageview(ctx context.Context, path string, opts *PageviewOptions) error`
 
@@ -197,11 +197,11 @@ Enqueues a custom event. Returns one of:
 
 | Error | Condition |
 |---|---|
-| `ErrInvalidEventName` | Name empty, >64 chars, or not matching `^[a-zA-Z0-9_-]+$` |
+| `ErrInvalidEventName` | Name empty, >64 UTF-8 bytes, or not matching `^[a-zA-Z0-9_-]+$` |
 | `ErrReservedPrefix` | Name starts with `nanolytica_` |
 | `ErrTooManyProps` | More than 10 props |
-| `ErrPropKey` | Prop key empty, >64 chars, or bad chars |
-| `ErrPropValue` | Prop value >256 chars |
+| `ErrPropKey` | Prop key empty, >64 UTF-8 bytes, or bad UTF-8 bytes |
+| `ErrPropValue` | Prop value >256 UTF-8 bytes |
 | `ErrClosed` | Client has been closed |
 
 ### `(*Client) Flush(ctx context.Context) error`
@@ -222,19 +222,19 @@ All validation runs locally before any network call:
 
 | Field | Rule |
 |---|---|
-| `site_id` | Non-empty string (not UUID-validated client-side) |
-| `path` | ≤ 2048 chars |
-| `referrer` | ≤ 2048 chars |
+| `site_id` | Canonical UUID string |
+| `path` | ≤ 2048 UTF-8 bytes |
+| `referrer` | ≤ 2048 UTF-8 bytes |
 | `screen_size` | Format `WIDTHxHEIGHT` |
-| `event_name` | 1–64 chars, `^[a-zA-Z0-9_-]+$`, not starting with `nanolytica_` |
-| `props` keys | 1–64 chars, `^[a-zA-Z0-9_-]+$` |
-| `props` values | ≤ 256 chars |
+| `event_name` | 1–64 UTF-8 bytes, `^[a-zA-Z0-9_-]+$`, not starting with `nanolytica_` |
+| `props` keys | 1–64 UTF-8 bytes, `^[a-zA-Z0-9_-]+$` |
+| `props` values | ≤ 256 UTF-8 bytes |
 | `props` count | ≤ 10 pairs |
 
 ## Transport behavior
 
 - Events are queued in memory and sent from a single background goroutine.
-- Server 5xx or network errors retry up to 3 times with 1 s / 2 s / 4 s backoff. 4xx errors (validation) are dropped immediately — never retried.
+- Server 408, 429, 5xx or network errors retry up to 3 times with 1 s / 2 s / 4 s backoff. Other 4xx errors (validation) are dropped immediately — never retried.
 - When the queue reaches `BufferSize`, the oldest pending event is dropped to make room.
 - All methods are safe to call concurrently from multiple goroutines.
 
@@ -250,10 +250,10 @@ All validation runs locally before any network call:
 - Confirm the site is created as **Native App** in the dashboard — web sites don't parse the app-version slot.
 
 **Rate limit (429)**
-- Default limit is 1000 events/min per site. Reduce call frequency or set `NANOLYTICA_MAX_SITE_EVENTS_PER_MIN` on the server.
+- Default limit is 1000 events/min per site. Reduce call frequency or set `NANOLYTICA_SITE_RATE_LIMIT` on the server.
 
 **`New` returns an error**
-- Only happens when `siteID` is empty. All other options are clamped to safe defaults.
+- Check the UUID, HTTP(S) endpoint and user-agent length.
 
 **Multiple services sharing one site**
 - Each `New` call creates an independent client with its own queue and goroutine. They share the same `site_id` on the server — combine-site filtering in the dashboard aggregates them.
@@ -267,3 +267,5 @@ go test ./...
 ## License
 
 MIT
+
+Delivery is best effort. Flush waits for send attempts, not database confirmation. A canceled enqueue context prevents queueing; once queued, delivery uses the HTTP client timeout. Server-side calls describe the sending server, not the original browser visitor; use the browser tracker for visitor geography. SDK pageviews do not measure engagement or Web Vitals.

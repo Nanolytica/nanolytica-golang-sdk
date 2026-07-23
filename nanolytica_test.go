@@ -56,7 +56,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *captured, *atomic.Int32) {
 
 func mustClient(t *testing.T, endpoint string) *Client {
 	t.Helper()
-	c, err := New("site-uuid-123", &Options{Endpoint: endpoint, BufferSize: 10})
+	c, err := New("11111111-1111-4111-8111-111111111111", &Options{Endpoint: endpoint, BufferSize: 10})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestPageview(t *testing.T) {
 		t.Fatalf("want 1 request, got %d", cap.len())
 	}
 	got := cap.at(0)
-	if got["site_id"] != "site-uuid-123" {
+	if got["site_id"] != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("site_id=%v", got["site_id"])
 	}
 	if got["path"] != "/home" {
@@ -152,7 +152,7 @@ func TestBufferOverflowDropsOldest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := New("site", &Options{Endpoint: srv.URL, BufferSize: 3})
+	c, err := New("11111111-1111-4111-8111-111111111111", &Options{Endpoint: srv.URL, BufferSize: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestRetryOn5xx(t *testing.T) {
 }
 
 func TestCloseIsIdempotent(t *testing.T) {
-	c, err := New("site", &Options{Endpoint: "http://unused"})
+	c, err := New("11111111-1111-4111-8111-111111111111", &Options{Endpoint: "http://unused"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,4 +228,61 @@ func TestInvalidSiteID(t *testing.T) {
 	if _, err := New("", nil); err != ErrInvalidSiteID {
 		t.Errorf("empty siteID: %v", err)
 	}
+}
+
+func TestTrailingSlashAndThrottle(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/collect" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if hits.Add(1) == 1 {
+			w.WriteHeader(429)
+		} else {
+			w.WriteHeader(204)
+		}
+	}))
+	defer srv.Close()
+	c := mustClient(t, srv.URL+"/")
+	defer c.Close()
+	_ = c.Pageview(context.Background(), "/", nil)
+	if err := c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("hits = %d", hits.Load())
+	}
+}
+
+func TestFlushCancellationAndClose(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	c := mustClient(t, srv.URL)
+	_ = c.Pageview(context.Background(), "/", nil)
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if c.Flush(ctx) != context.Canceled {
+		t.Fatal("flush ignored cancellation")
+	}
+	if c.Pageview(ctx, "/", nil) != context.Canceled {
+		t.Fatal("enqueue ignored cancellation")
+	}
+	closing := make(chan struct{})
+	go func() { c.Close(); close(closing) }()
+	flushed := make(chan struct{})
+	go func() { c.Flush(context.Background()); close(flushed) }()
+	select {
+	case <-flushed:
+		t.Fatal("flush returned before delivery")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-flushed
+	<-closing
 }
