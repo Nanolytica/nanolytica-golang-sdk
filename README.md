@@ -250,7 +250,7 @@ All validation runs locally before any network call:
 - Confirm the site is created as **Native App** in the dashboard — web sites don't parse the app-version slot.
 
 **Rate limit (429)**
-- Default limit is 1000 events/min per site. Reduce call frequency or set `NANOLYTICA_SITE_RATE_LIMIT` on the server.
+- Default limit is 1000 events/min per site. Reduce call frequency or set `NANOLYTICA_MAX_SITE_EVENTS_PER_MIN` on the server.
 
 **`New` returns an error**
 - Check the UUID, HTTP(S) endpoint and user-agent length.
